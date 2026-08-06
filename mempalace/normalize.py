@@ -180,6 +180,11 @@ def normalize(filepath: str) -> str:
         normalized = _try_normalize_json(content)
         if normalized:
             return normalized
+        # JSON-looking content that no parser understands is machine
+        # noise (e.g. a Claude Code transcript with only queue-operation /
+        # attachment / system records), not a transcript. Filing it raw
+        # pollutes the palace with unparsed JSONL fragments.
+        return ""
 
     return content
 
@@ -218,6 +223,11 @@ def normalize_conversations(filepath: str) -> list:
         split = _try_normalize_json_split(content)
         if split:
             return split
+        # JSON-looking content that no parser understands is machine
+        # noise (e.g. a Claude Code transcript with only queue-operation /
+        # attachment / system records), not a transcript. Filing it raw
+        # pollutes the palace with unparsed JSONL fragments.
+        return []
 
     return [content]
 

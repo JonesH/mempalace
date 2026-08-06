@@ -1654,6 +1654,29 @@ def test_continue_json_integration_via_normalize(tmp_path):
     assert "A memory system for AI." in result
 
 
+def test_normalize_unparseable_jsonl_is_empty_not_raw(tmp_path):
+    """A JSONL file no parser understands (e.g. a Claude Code transcript
+    with only queue-operation/attachment/system records) must NOT be filed
+    as raw JSONL — that pollutes the palace with unparsed fragments."""
+    lines = [
+        json.dumps({"type": "queue-operation", "operation": "enqueue", "content": "/recall"}),
+        json.dumps({"type": "attachment", "attachment": {"type": "hook_success"}}),
+        json.dumps({"type": "system", "content": "session start"}),
+        json.dumps({"type": "last-prompt", "leafUuid": "abc"}),
+    ]
+    f = tmp_path / "session.jsonl"
+    f.write_text("\n".join(lines))
+    assert normalize(str(f)) == ""
+    assert normalize_conversations(str(f)) == []
+
+
+def test_normalize_conversations_plain_text_passthrough(tmp_path):
+    """Non-JSON files still pass through unchanged (back-compat)."""
+    f = tmp_path / "notes.txt"
+    f.write_text("just some notes\nno json here")
+    assert normalize_conversations(str(f)) == ["just some notes\nno json here"]
+
+
 # ── _try_normalize_json ────────────────────────────────────────────────
 
 
