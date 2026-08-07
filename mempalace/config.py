@@ -1144,11 +1144,13 @@ class MempalaceConfig:
 
     @property
     def embedding_device(self):
-        """Hardware device for the ONNX embedding model.
+        """Hardware device for the embedding model.
 
         Values: ``"auto"`` (default), ``"cpu"``, ``"cuda"``, ``"coreml"``,
-        ``"dml"``. Read from env ``MEMPALACE_EMBEDDING_DEVICE`` first, then
-        ``embedding_device`` in ``config.json``, then ``"auto"``.
+        ``"dml"``, ``"mlx"`` (Apple Silicon GPU via mlx-embeddings, macOS
+        only, embeddinggemma only). Read from env
+        ``MEMPALACE_EMBEDDING_DEVICE`` first, then ``embedding_device`` in
+        ``config.json``, then ``"auto"``.
 
         ``auto`` resolves to the first available accelerator at runtime via
         :mod:`mempalace.embedding`; requesting an unavailable accelerator

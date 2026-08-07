@@ -118,10 +118,12 @@ pgvector = ["psycopg[binary]>=3.1"]
 #   pip install mempalace[gpu]       — NVIDIA CUDA
 #   pip install mempalace[dml]       — DirectML (Windows AMD/Intel/NVIDIA)
 #   pip install mempalace[coreml]    — macOS Neural Engine
-# After install, set MEMPALACE_EMBEDDING_DEVICE=cuda|dml|coreml (or "auto").
+#   pip install mempalace[mlx]       — Apple Silicon GPU (embeddinggemma only)
+# After install, set MEMPALACE_EMBEDDING_DEVICE=cuda|dml|coreml|mlx (or "auto").
 gpu = ["onnxruntime-gpu>=1.16"]
 dml = ["onnxruntime-directml>=1.16"]
 coreml = ["onnxruntime>=1.16"]
+mlx = ["mlx-embeddings>=0.1.0; python_version >= '3.10'"]
 # Multilingual extra kept as a no-op alias for back-compat with
 # `pip install mempalace[multilingual]` — these deps now ship in core.
 multilingual = []
