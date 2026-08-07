@@ -674,6 +674,7 @@ class _PgVectorClient:
         table: str,
         *,
         where: Optional[dict] = None,
+        ids: Optional[list] = None,
         with_embedding: bool = False,
         with_document: bool = True,
         limit: Optional[int] = None,
@@ -682,6 +683,17 @@ class _PgVectorClient:
         qi = _quote_identifier(table)
         params: list = []
         where_sql = _where_to_sql(where, params) if where else "TRUE"
+        if ids is not None:
+            if not ids:
+                return []
+            # Push the id filter into SQL. Without this, a `get(ids=...)`
+            # (collision scans, add() existence checks, dedup lookups)
+            # fetched the ENTIRE table — id, document, metadata — into
+            # Python and filtered locally, blowing up RAM on 10k+ drawer
+            # palaces (each drawer's document text shipped over the wire
+            # per batch).
+            params.append(list(ids))
+            where_sql = f"({where_sql}) AND id = ANY(%s)"
         # Project NULL into the document slot when the caller only needs
         # metadata (e.g. mempalace_status's wing/room tally). Keeps the
         # positional _row parser unchanged — document remains record[1] —
@@ -888,6 +900,7 @@ class PgVectorCollection(BaseCollection):
     def _scroll(
         self,
         *,
+        ids=None,
         where=None,
         with_embedding=False,
         with_document=True,
@@ -901,6 +914,7 @@ class PgVectorCollection(BaseCollection):
             return []
         return self._client.scroll_rows(
             self._table,
+            ids=ids,
             where=where,
             with_embedding=with_embedding,
             with_document=with_document,
@@ -947,7 +961,7 @@ class PgVectorCollection(BaseCollection):
         _validate_where(where)
         _validate_where(where_document)
         pushdown = None if _requires_local_filter(where, where_document) else where
-        rows = self._scroll(where=pushdown, with_embedding=with_embedding)
+        rows = self._scroll(ids=ids, where=pushdown, with_embedding=with_embedding)
         id_set = set(ids) if ids is not None else None
         return [
             row

@@ -99,6 +99,7 @@ class _FakePgVectorClient:
         self,
         table,
         *,
+        ids=None,
         where=None,
         with_embedding=False,
         with_document=True,
@@ -106,9 +107,18 @@ class _FakePgVectorClient:
         offset=None,
     ):
         self.scroll_calls.append(
-            {"where": where, "limit": limit, "offset": offset, "with_document": with_document}
+            {
+                "where": where,
+                "ids": ids,
+                "limit": limit,
+                "offset": offset,
+                "with_document": with_document,
+            }
         )
         rows = self._filtered(table, where)
+        if ids is not None:
+            id_set = set(ids)
+            rows = [row for row in rows if row["id"] in id_set]
         if limit is not None or offset:
             # Mirror the real backend: ORDER BY id, then LIMIT/OFFSET.
             rows = sorted(rows, key=lambda row: row["id"])
@@ -418,7 +428,9 @@ def test_pgvector_get_unfiltered_page_pushes_limit_offset(tmp_path, fake_pgvecto
 
     # An unfiltered page is pushed to SQL as LIMIT/OFFSET instead of fetching
     # the whole table and slicing in Python (the O(rows x pages) path).
-    assert client.scroll_calls == [{"where": None, "limit": 2, "offset": 1, "with_document": True}]
+    assert client.scroll_calls == [
+        {"where": None, "ids": None, "limit": 2, "offset": 1, "with_document": True}
+    ]
     # ORDER BY id, then OFFSET 1 LIMIT 2 -> b, c.
     assert page.ids == ["b", "c"]
 
@@ -439,9 +451,58 @@ def test_pgvector_get_filtered_page_stays_on_full_scan(tmp_path, fake_pgvector):
     # A filtered get keeps the full-scan path (no LIMIT/OFFSET pushed) so the
     # exact _matches_where re-filter runs before pagination.
     assert client.scroll_calls == [
-        {"where": {"wing": "x"}, "limit": None, "offset": None, "with_document": True}
+        {"where": {"wing": "x"}, "ids": None, "limit": None, "offset": None, "with_document": True}
     ]
     assert page.ids == ["c"]
+
+
+def test_pgvector_get_by_ids_pushes_filter_to_sql(tmp_path, fake_pgvector):
+    """get(ids=...) must push the id filter into SQL, not fetch the whole table.
+
+    Regression test for the 50GB-RAM spike: every 1000-drawer batch of a
+    convo mine ran assert_no_collisions -> collection.get(ids=...) -> a full
+    SELECT id, document, metadata FROM <table> (no WHERE) pulled into Python,
+    so a 90k-drawer palace shipped ~all documents over the wire per batch.
+    """
+    _backend, col = _collection(tmp_path)
+    col.add(
+        ids=[f"d{i}" for i in range(50)],
+        documents=[f"doc {i}" for i in range(50)],
+        metadatas=[{"source_file": f"file{i}.jsonl", "chunk_index": i} for i in range(50)],
+        embeddings=[[1.0, 0.0]] * 50,
+    )
+    client = fake_pgvector.instances[0]
+    client.scroll_calls.clear()
+
+    page = col.get(ids=["d3", "d17", "d42"], include=["metadatas"])
+
+    # The ids list must reach scroll_rows (which turns it into WHERE id = ANY(%s)).
+    assert client.scroll_calls == [
+        {
+            "where": None,
+            "ids": ["d3", "d17", "d42"],
+            "limit": None,
+            "offset": None,
+            "with_document": True,
+        }
+    ]
+    assert sorted(page.ids) == ["d17", "d3", "d42"]
+    assert [m["chunk_index"] for m in page.metadatas] == [3, 17, 42]
+
+
+def test_pgvector_get_by_empty_ids_short_circuits(tmp_path, fake_pgvector):
+    _backend, col = _collection(tmp_path)
+    col.add(
+        ids=["a", "b"],
+        documents=["da", "db"],
+        metadatas=[{}, {}],
+        embeddings=[[1, 0], [0, 1]],
+    )
+    client = fake_pgvector.instances[0]
+    client.scroll_calls.clear()
+
+    page = col.get(ids=[], include=["metadatas"])
+    assert page.ids == []  # short-circuits; no full-table fetch
 
 
 def test_pgvector_get_offset_only_and_limit_only_push(tmp_path, fake_pgvector):
@@ -458,7 +519,7 @@ def test_pgvector_get_offset_only_and_limit_only_push(tmp_path, fake_pgvector):
     client.scroll_calls.clear()
     page = col.get(offset=2, include=["metadatas"])
     assert client.scroll_calls == [
-        {"where": None, "limit": None, "offset": 2, "with_document": True}
+        {"where": None, "ids": None, "limit": None, "offset": 2, "with_document": True}
     ]
     assert page.ids == ["c", "d"]
 
@@ -466,7 +527,7 @@ def test_pgvector_get_offset_only_and_limit_only_push(tmp_path, fake_pgvector):
     client.scroll_calls.clear()
     page = col.get(limit=2, include=["metadatas"])
     assert client.scroll_calls == [
-        {"where": None, "limit": 2, "offset": None, "with_document": True}
+        {"where": None, "ids": None, "limit": 2, "offset": None, "with_document": True}
     ]
     assert page.ids == ["a", "b"]
 
@@ -486,7 +547,7 @@ def test_pgvector_get_negative_bounds_use_python_slice(tmp_path, fake_pgvector):
     # through to the unchanged full-scan + Python-slice path.
     page = col.get(offset=-1, include=["metadatas"])
     assert client.scroll_calls == [
-        {"where": None, "limit": None, "offset": None, "with_document": True}
+        {"where": None, "ids": None, "limit": None, "offset": None, "with_document": True}
     ]
     assert page.ids == ["c"]
 
@@ -537,7 +598,7 @@ def test_pgvector_get_all_metadata_skips_document_column(tmp_path, fake_pgvector
 
     # Exactly one scroll, with_document=False (no document text on the wire).
     assert client.scroll_calls == [
-        {"where": None, "limit": None, "offset": None, "with_document": False}
+        {"where": None, "ids": None, "limit": None, "offset": None, "with_document": False}
     ]
     # Returns just the metadata dicts (full set, any order — sort by wing+room for stability).
     metas_sorted = sorted(metas, key=lambda m: (m["wing"], m["room"]))
@@ -571,7 +632,7 @@ def test_pgvector_get_all_metadata_filtered_uses_fast_path(tmp_path, fake_pgvect
     # Exactly one scroll with with_document=False — pushdown forwards the
     # equality filter to SQL; no document text on the wire.
     assert client.scroll_calls == [
-        {"where": {"wing": "x"}, "limit": None, "offset": None, "with_document": False}
+        {"where": {"wing": "x"}, "ids": None, "limit": None, "offset": None, "with_document": False}
     ]
     assert sorted(metas, key=lambda m: m["wing"]) == [{"wing": "x"}, {"wing": "x"}]
 
